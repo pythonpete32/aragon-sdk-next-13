@@ -1,179 +1,123 @@
 # Aragon SDK + NextJS 13
 
-This project is a basic demo using the [aragonOSx SDK](https://github.com/aragon/sdk).
+> Part 2 Add Aragon SDK
 
-## Stack
+## Install the Aragon SDK
 
-- [Next Js 13](https://nextjs.org/)
-- [Typescript](https://www.typescriptlang.org/)
-- [Aragon SDK](https://github.com/aragon/sdk)
-- [RainbowKit](https://www.rainbowkit.com/)
-- [Viem](https://viem.sh/)
-- [Wagmi](https://wagmi.sh/)
-
-## Setup
-
-1. Bootstrap the project by using Create React App with pnpm and choose the defaults
+Install the Aragon SDK and ethers v5
 
 ```bash
-npx create-next-app@latest --use-pnpm
+pnpm install @aragon/sdk-client ethers@legacy-v5
 ```
 
-2. Install Rainbowkit, Wagmi, and viem to bootstrap connecting to the blockchain
+## useEthersSigner
+
+Wagmi uses viem but the Aragon SDK currently supports ethers v5
 
 ```bash
-pnpm install @rainbow-me/rainbowkit wagmi viem && pnpm install -D pino-pretty encoding lokijs
+mkdir src/hooks ; touch src/hooks/useEthersSigner.ts
 ```
-
-3. Get API keys from [Alchemy](https://www.alchemy.com/) and [Wallet Connect](https://cloud.walletconnect.com/sign-up), then create an `.env.local` file at the root of the project
-
-```bash
-# ./.env.local
-
-NEXT_PUBLIC_ALCHEMY_KEY="ALCHEMY_KEY"
-NEXT_PUBLIC_WALLET_CONNECT_ID="WALLET_CONNECT_KEY"
-```
-
-4. Modify `next.config.js`
-
-```javascript
-// ./next.config.js
-
-/** @type {import('next').NextConfig} */
-module.exports = {
-  reactStrictMode: true,
-  webpack: (config) => {
-    config.resolve.fallback = { fs: false, net: false, tls: false };
-    return config;
-  },
-};
-```
-
-5. Create a Wagmi config
 
 ```typescript
-// ./src/lib/wagmi.ts
+// src/hooks/useEthersSigner.ts
 
-import { getDefaultWallets } from "@rainbow-me/rainbowkit";
-import { configureChains, createConfig } from "wagmi";
-import { goerli, mainnet, polygon, polygonMumbai } from "wagmi/chains";
-import { publicProvider } from "wagmi/providers/public";
-import { alchemyProvider } from "wagmi/providers/alchemy";
+import { Signer, providers } from "ethers";
+import { useState, useEffect } from "react";
+import { getWalletClient } from "@wagmi/core";
 
-const { chains, publicClient, webSocketPublicClient } = configureChains(
-  [mainnet, polygon, goerli, polygonMumbai],
-  [
-    publicProvider(),
-    alchemyProvider({ apiKey: process.env.NEXT_PUBLIC_ALCHEMY_API_KEY ?? "" }),
-  ]
-);
-
-const { connectors } = getDefaultWallets({
-  appName: "Aragon SDK Example App",
-  chains,
-  projectId: process.env.NEXT_PUBLIC_WALLET_CONNECT_ID ?? "",
-});
-
-const config = createConfig({
-  autoConnect: true,
-  connectors,
-  publicClient,
-  webSocketPublicClient,
-});
-
-export { config, chains };
-```
-
-6. Create a providers component
-
-```typescript
-// ./src/components/providers.tsx
-"use client";
-
-import React, { ReactNode, useEffect, useState } from "react";
-import { chains, config } from "@/lib/wagmi";
-import { RainbowKitProvider } from "@rainbow-me/rainbowkit";
-import { WagmiConfig } from "wagmi";
-import { AragonSDKWrapper } from "@/hooks/aragon";
-
-interface ProvidersProps {
-  children: ReactNode;
+interface EthersSigner {
+  signer: Signer | undefined;
+  loading: boolean;
+  error: Error | undefined;
 }
 
-const Providers = ({ children }: ProvidersProps) => {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+export function useEthersSigner(chainId?: number): EthersSigner {
+  const [signer, setSigner] = useState<Signer | undefined>(undefined);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<Error | undefined>(undefined);
 
-  return (
-    <WagmiConfig config={config}>
-      <AragonSDKWrapper>
-        <RainbowKitProvider chains={chains}>
-          {mounted && children}
-        </RainbowKitProvider>
-      </AragonSDKWrapper>
-    </WagmiConfig>
-  );
-};
+  useEffect(() => {
+    (async () => {
+      try {
+        const walletClient = await getWalletClient({ chainId: chainId ?? 1 });
+        if (!walletClient) {
+          setSigner(undefined);
+          setLoading(false);
+          console.error("No wallet client found");
+          return;
+        }
 
-export default Providers;
-```
+        const { account, chain, transport } = walletClient;
+        const network = {
+          chainId: chain.id,
+          name: chain.name,
+          ensAddress: chain.contracts?.ensRegistry?.address,
+        };
+        const provider = new providers.Web3Provider(transport, network);
+        setSigner(provider.getSigner(account.address));
+      } catch (err) {
+        setError(err as Error);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [chainId]);
 
-7. Wrap the layout component with the provider and import the rainbow kit styles
-
-```typescript
-// ./src/app/layout.tsx
-
-import Providers from "@/components/providers";
-import "./globals.css";
-import type { Metadata } from "next";
-import { Inter } from "next/font/google";
-
-// import the styles from rainbow kit
-import "@rainbow-me/rainbowkit/styles.css";
-
-const inter = Inter({ subsets: ["latin"] });
-
-export const metadata: Metadata = {
-  title: "Create Next App",
-  description: "Generated by create next app",
-};
-
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  return (
-    <html lang="en">
-      <body className={inter.className}>
-        // now all the pages and components can access Wagmi and Rainbow kit
-        <Providers>{children}</Providers>
-      </body>
-    </html>
-  );
+  return { signer, loading, error };
 }
 ```
 
-8. Re-export the Rainbow kit `ConnectButton` as a client component
+## Setup Aragon SDK
 
-```typescript
-// src/components/ConnectButton
-"use client";
-export { ConnectButton } from "@rainbow-me/rainbowkit";
+1. First create a function that creates the Aragon Clients
+
+```bash
+touch src/lib/aragon.ts
 ```
 
-9. Remove the code in the root `page.tsx` and replace it with:
-
 ```typescript
-// ./src/app/page.tsx
+// ./src/lib/aragon.ts
 
-import { ConnectButton } from "@/components/ConnectButton";
+import {
+  ContextParams,
+  TokenVotingClient,
+  Client,
+  Context,
+} from "@aragon/sdk-client";
+import { Signer, Wallet } from "ethers";
 
-export default function Home() {
-  return (
-    <main className="flex min-h-screen flex-col items-center justify-between p-24">
-      <ConnectButton />
-    </main>
-  );
+const WEB3_PROVIDER_URL: { [key: number]: string } = {
+  1: "https://rpc.ankr.com/eth",
+  5: "https://rpc.ankr.com/eth_goerli",
+  137: "https://rpc.ankr.com/polygon",
+  80001: "https://rpc.ankr.com/polygon_mumbai",
+};
+
+interface AragonClients {
+  context: Context;
+  baseClient: Client;
+  tokenVotingClient: TokenVotingClient;
+}
+
+export function getAragonClients(
+  chainId: number,
+  signer?: Signer
+): AragonClients {
+  signer = signer ?? Wallet.createRandom();
+
+  const aragonSDKContextParams: ContextParams = {
+    network: chainId,
+    signer,
+    web3Providers: WEB3_PROVIDER_URL[chainId],
+  };
+
+  const contextInstance = new Context(aragonSDKContextParams);
+
+  return {
+    context: contextInstance,
+    baseClient: new Client(contextInstance),
+    tokenVotingClient: new TokenVotingClient(contextInstance),
+  };
 }
 ```
+
